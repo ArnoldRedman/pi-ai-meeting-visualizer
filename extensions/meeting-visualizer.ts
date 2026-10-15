@@ -454,7 +454,16 @@ async function watchAsyncRun(meeting: Meeting, asyncDir: string, ctx: ExtensionC
     // 已经被完成通知收过尾就不管了
     if (!meetings.has(meeting.toolCallId)) return;
     const status = readStatus(asyncDir);
-    if (!status || RUNNING_STATES.has(String(status.state))) continue;
+    if (!status) continue;
+    // 顺便把已经跑完的子会话按席位报掉：没有完成通知的环境（pi -p 无头跑）也就能逐席出结论，
+    // 这里拿不到结论正文，整轮落盘时再用 stance_changed 补
+    for (const step of status.steps ?? []) {
+      if (step.status !== 'completed' && step.status !== 'failed') continue;
+      const key = String(step.workflowKey ?? '');
+      if (!meeting.keys.has(key) || meeting.finished.has(meeting.keys.get(key) as string)) continue;
+      await guard('提前收尾', () => finishSeatEarly(meeting, key, step.status === 'failed', ''), ctx);
+    }
+    if (RUNNING_STATES.has(String(status.state))) continue;
     const taken = takeMeeting(meeting.toolCallId);
     if (!taken) return;
     await finishAsync(taken, '', ctx);
