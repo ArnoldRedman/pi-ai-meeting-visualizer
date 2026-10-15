@@ -13,6 +13,7 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Type } from 'typebox';
+import { childNotice, readStance, seatIdFor, workflowKeyFor } from '../lib/meeting-follow.mjs';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 
 // 扩展固定位于 <包>/extensions/ 下，包根目录就是它的上一级
@@ -228,7 +229,17 @@ async function configCommand(args: string, ctx: ExtensionContext): Promise<strin
 type SeatArg = { name?: string; provider?: string; model?: string; thinking?: string };
 // 一场已经推了 meeting_started 的会议，key 是 subagent 的 toolCallId
 // 留着它才能在工具结束时把返回的席位名对回到席位 id（协议要求 id 是 ASCII）
-type Meeting = { toolCallId: string; sessionId: string; ids: Map<string, string>; asyncDir?: string };
+type Meeting = {
+  toolCallId: string;
+  sessionId: string;
+  ids: Map<string, string>;
+  // 会议脚本 runs.all 的 key → 席位 id（用来把子会话完成通知对回席位）
+  keys: Map<string, string>;
+  // 已经提前报过 seat_finished 的席位（协议规定非工作状态不能重复 finish，只能改立场）
+  finished: Set<string>;
+  asyncDir?: string;
+  runId?: string;
+};
 
 type SeatEventRow = { seat?: string; ok?: boolean; stance?: string | null; text?: string; stanceRound?: number };
 type MeetingReturn = { tag?: string; rounds?: number; perSeat?: SeatEventRow[]; round1?: SeatEventRow[]; round2?: SeatEventRow[] };
@@ -239,15 +250,6 @@ const cut = (value: unknown, max: number): string => {
   const text = String(value ?? '').trim();
   return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
 };
-
-// 席位 id 必须是 1–64 位 ASCII 字母数字/_/-（协议约束），中文席位名换成 seat1、seat2
-function seatIdFor(name: string, index: number, used: Set<string>): string {
-  const base = name.replace(/[^A-Za-z0-9_-]/g, '-').replace(/^[^A-Za-z0-9]+/, '').slice(0, 60) || `seat${index + 1}`;
-  let id = base;
-  for (let suffix = 2; used.has(id); suffix += 1) id = `${base}-${suffix}`;
-  used.add(id);
-  return id;
-}
 
 function sessionIdFor(tag: string): string {
   const slug = tag.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
@@ -316,17 +318,20 @@ async function openMeeting(toolCallId: string, call: { tag: string; seats: SeatA
   const sessionId = sessionIdFor(call.tag);
   const used = new Set<string>();
   const ids = new Map<string, string>();
+  const keys = new Map<string, string>();
+  const keyUsed = new Set<string>();
   const seats = call.seats.slice(0, 16).map((seat, index) => {
     const name = cut(seat.name || `席位 ${index + 1}`, 80) || `席位 ${index + 1}`;
     const id = seatIdFor(name, index, used);
     ids.set(name, id);
+    keys.set(workflowKeyFor(name, index, keyUsed), id);
     return { id, label: name, model: cut(`${seat.provider ?? ''}/${seat.model ?? ''}:${seat.thinking ?? ''}`, 80) };
   });
   await postEvent(sessionId, { type: 'meeting_started', sessionId, tag: cut(call.tag || '多模型会议', 200), seats });
   await postEvent(sessionId, { type: 'round_started', sessionId, round: 1 });
   // runs.all 会让所有席位同时开跑，所以一次全部置为工作中
   for (const seat of seats) await postEvent(sessionId, { type: 'seat_started', sessionId, seat: seat.id, round: 1 });
-  meetings.set(toolCallId, { toolCallId, sessionId, ids });
+  meetings.set(toolCallId, { toolCallId, sessionId, ids, keys, finished: new Set<string>() });
   if (settings.autoOpen) openPage(`${BASE_URL}/meeting/${sessionId}`);
   ctx.ui.notify(`会议室已就绪：${BASE_URL}/meeting/${sessionId}（${seats.length} 席）${fetchedAssets ? '，首次已自动下载资源' : ''}`, 'info');
 }
@@ -347,17 +352,24 @@ async function closeMeeting(meeting: Meeting, data: MeetingReturn | null, isErro
     const row = rows[index];
     const id = ids.get(String(row.seat ?? '')) ?? [...ids.values()][index];
     if (!id) continue;
+    if (row.ok === false) failed += 1;
+    // 整轮结束才回来、而且已经提前报过结论的席位：只能更新公开立场（协议不允许重复 finish）
+    if (meeting.finished.has(id)) {
+      const stance = cut(row.stance || '', 200);
+      if (stance) await postEvent(sessionId, { type: 'stance_changed', sessionId, seat: id, stance });
+      continue;
+    }
     const first = data.round1?.[index];
     // 第一轮的正文配 round 1；改判过的立场用后面的 stance_changed 单独发
     const message = cut(first?.stance || first?.text || row.stance || (row.ok === false ? '本轮没有给出结论' : '本轮完成'), 2000);
-    if (row.ok === false) failed += 1;
     await postEvent(sessionId, { type: 'seat_finished', sessionId, seat: id, round: 1, status: row.ok === false ? 'error' : 'ok', message });
     if (row.stanceRound === 2) revised.add(index);
   }
   for (const index of revised) {
     const id = [...ids.values()][index];
+    if (!id || meeting.finished.has(id)) continue;
     const stance = cut(data.round2?.[index]?.stance, 200);
-    if (id && stance) await postEvent(sessionId, { type: 'stance_changed', sessionId, seat: id, stance });
+    if (stance) await postEvent(sessionId, { type: 'stance_changed', sessionId, seat: id, stance });
   }
   const parts = [`${rows.length} 席参与第一轮`];
   if (failed > 0) parts.push(`${failed} 席失败`);
@@ -383,6 +395,28 @@ async function guard(what: string, run: () => Promise<void>, ctx: ExtensionConte
   } catch (error) {
     ctx.ui.notify(`会议室${what}失败：${error instanceof Error ? error.message : String(error)}`, 'warning');
   }
+}
+
+// 一个席位答完就立刻出结论：房间里的它会离开座位去散步（场景本来就把 done 的席位拿去摸鱼/散步）
+async function finishSeatEarly(meeting: Meeting, key: string, failed: boolean, output: string): Promise<void> {
+  const seat = meeting.keys.get(key);
+  if (!seat) return;
+  const stance = failed ? '' : readStance(output);
+  if (meeting.finished.has(seat)) {
+    // 重试或交叉质询又出了新结论：席位已经完成，只能更新公开立场
+    if (stance) await postEvent(meeting.sessionId, { type: 'stance_changed', sessionId: meeting.sessionId, seat, stance: cut(stance, 200) });
+    return;
+  }
+  if (!(await healthy())) return;
+  meeting.finished.add(seat);
+  await postEvent(meeting.sessionId, {
+    type: 'seat_finished',
+    sessionId: meeting.sessionId,
+    seat,
+    round: 1,
+    status: failed ? 'error' : 'ok',
+    message: cut(stance || (failed ? '本轮失败' : '本轮已作答，结论等整轮结束一起汇总'), 2000),
+  });
 }
 
 // 异步会议先只给执据，返回值要等跑完才落盘。两个触发口：
@@ -448,6 +482,8 @@ export default function meetingVisualizer(pi: ExtensionAPI) {
     const asyncDir = event.result?.details?.asyncDir;
     if (!data?.perSeat && !event.isError && typeof asyncDir === 'string' && asyncDir !== '') {
       meeting.asyncDir = asyncDir;
+      // 会议脚本的 runId 就是 asyncDir 的末段，用它把子会话完成通知认到自己名下
+      meeting.runId = path.basename(asyncDir);
       void watchAsyncRun(meeting, asyncDir, ctx);
       return;
     }
@@ -455,9 +491,19 @@ export default function meetingVisualizer(pi: ExtensionAPI) {
     await guard('收尾', () => closeMeeting(meeting, data, event.isError, text, ctx), ctx);
   });
 
-  // 异步会议跑完会把结果作为一条 custom 消息送回来，这里是最快的收尾时机
+  // 异步会议跑完会把结果作为一条 custom 消息送回来，这里是最快的收尾时机；
+  // 子会话单独完成的通知也走这条路，可以做到“谁先答完谁先出结论”
   pi.on('message_start', async (event, ctx) => {
     const text = messageText(event.message);
+    if (!text.includes('Workflow')) return;
+    const child = childNotice(text);
+    if (child) {
+      for (const meeting of meetings.values()) {
+        if (meeting.runId !== child.runId) continue;
+        await guard('提前收尾', () => finishSeatEarly(meeting, child.key, child.failed, child.output), ctx);
+      }
+      return;
+    }
     if (!text.includes('Background task completed') || !text.includes('Return:')) return;
     for (const meeting of [...meetings.values()]) {
       if (!meeting.asyncDir || !text.includes(meeting.asyncDir)) continue;
