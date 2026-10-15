@@ -1,10 +1,10 @@
 {
   "name": "pi-ai-meeting-visualizer",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "浏览器中的 AI 会议室可视化插件",
   "private": true,
   "type": "module",
-  "license": "MIT",
+  "license": "CC-BY-NC-SA-4.0",
   "keywords": [
     "pi-package"
   ],
@@ -17,7 +17,9 @@
     "assets/README.md",
     "assets/models/characters/*.glb",
     "scripts/",
-    "README.md"
+    "README.md",
+    "NOTICE.md",
+    "LICENSE"
   ],
   "engines": {
     "node": ">=22"

@@ -77,8 +77,28 @@ pi install git:github.com/ArnoldRedman/pi-ai-meeting-visualizer
 | `/meeting open` | 启动（若未启动）并用默认浏览器打开会议列表 |
 | `/meeting status` | 服务在不在跑、当前有几场会议、各自进行到第几轮 |
 | `/meeting stop` | 停掉本会话启动的服务 |
+| `/meeting config` | 改三个开关（见下），不带参数时逐项问 |
 
-模型也可以直接调用 `meeting_visualizer` 工具做同样的事（动作名相同）。服务是会话级资源：Pi 退出时会自动停掉，会议数据只存在内存。端口默认 `34721`，用 `MEETING_PORT`（或 `PORT`）改；端口被占用时明确报错，不自动切换。
+模型也可以直接调用 `meeting_visualizer` 工具完成 start/stop/status/open（动作名相同）；设置只走 `/meeting config`。服务是会话级资源：Pi 退出时会自动停掉，会议数据只存在内存。端口默认 `34721`，用 `MEETING_PORT`（或 `PORT`）改；端口被占用时明确报错，不自动切换。
+
+### 设置
+
+三个开关存在 Pi 配置目录下的 `meeting-visualizer.json`（默认 `~/.pi/agent/meeting-visualizer.json`，与 `ai-meeting.json` 同处）：
+
+| 设置 | 默认 | 说明 |
+| --- | --- | --- |
+| `autoStart` | `true` | 会议开始时自动拉起可视化服务；关掉后会议不再自动跟随（要看得先 `/meeting start`） |
+| `autoOpen` | `false` | 会议开始时自动用默认浏览器打开页面 |
+| `autoStopSeconds` | `0` | 会议结束后过多少秒自动停掉服务，`0` = 不自动停 |
+
+```sh
+/meeting config                            # 看当前设置（TUI 里逐项选）
+/meeting config autoStart off              # 不自动起服务，需要时自己 /meeting start
+/meeting config autoOpen on                # 开会就跳浏览器
+/meeting config autoStop 30                # 会议结束后 30 秒自动收工
+```
+
+自动停只会停本会话自己拉起来的那个服务（别的会话在用的不碰）；`/meeting stop` 随时能立即停。所有自动行为都只影响可视化，不会改动会议本身。
 
 ### 开会时自动出现
 
@@ -162,5 +182,9 @@ $env:PORT=34722; npm start
 - 场景最多支持协议约定的 16 个席位；同一厂家的多人共用同一套骨骼模型，各自独立克隆，互不影响
 - 限制像素比到 1.5、动画约 30 FPS；页面隐藏或场景滚出视口时暂停循环，支持系统减少动态效果设置
 - 尚未接入真实会议、实现 SSE/数据库/空闲回收；扩展只在首次启动时自动联网下载 Kenney 资源（之后走缓存）
+
+### 许可
+
+本仓库（含随包发布的 8 个角色模型）采用 [CC BY-NC-SA 4.0](LICENSE)，与角色仓库 pi-meeting-chibis 一致：允许自由使用、修改、再分发，**禁止商业使用**，分发需保留署名并以同一许可证发布。商业授权与其它例外事项见 [NOTICE.md](NOTICE.md)（品牌标志、Kenney CC0 资源、Three.js / fflate 的归属都写在那里）。
 
 `pi-ai-meeting` 核心项目不需要做任何修改，可视化插件单独安装即可。
