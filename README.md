@@ -80,6 +80,21 @@ pi install git:github.com/ArnoldRedman/pi-ai-meeting-visualizer
 
 模型也可以直接调用 `meeting_visualizer` 工具做同样的事（动作名相同）。服务是会话级资源：Pi 退出时会自动停掉，会议数据只存在内存。端口默认 `34721`，用 `MEETING_PORT`（或 `PORT`）改；端口被占用时明确报错，不自动切换。
 
+### 开会时自动出现
+
+装了 [pi-ai-meeting](https://github.com/ArnoldRedman/pi-ai-meeting) 的会话里**不用手动敲命令**：只要 `subagent` 开始跑它的 `meeting.js`，插件就认出这场会议、自动把服务拉起来，并在 pi 里 notify 一个门牌（`/meeting/<会话 id>`）。
+
+![真实会议自动出现：两个席位的结论已经挂在房间里](assets/screenshots/auto-follow.png)
+
+- 席位直接取 `args.seats`（名字 → 该厂家的角色），`round_started` 和全员 `seat_started` 一次发完——`runs.all` 本来就让所有席位同时开跑
+- ai-meeting 默认 `async: true`，所以启动后先拿到的只是执据，返回值要等跑完才落盘：完成通知（`role: custom`，带 `asyncDir` 和返回值）一到就收尾，同时每 30 秒看一眼该运行目录下的 `status.json` 兜底（那里存着完整的 `workflow.value`；通知内容过长会被截断，所以以文件为准）
+- 收尾时逐席发 `seat_finished`，消息取该席位第一轮的结论句；交叉质询后改判过的席位再补一条 `stance_changed`
+- 最后发 `meeting_finished`，摘要只写客观事实（几席参与、几席失败、几席改判），不编结论、不替脚本算票
+
+**粒度限制（真实存在，不是偷懒）**：会议结果要等整轮结束才落盘，所以房间里的节奏是“全员并行思考 → 一起出结果”，等待期间每席只显示正在工作。轮次内的实时进度（谁先想到什么）拿不到：那些内容在各席位自己的会话里，去读它等于读模型内部调用细节，本项目不碰。中途失败的那一席会按实际状态显示。
+
+自动跟随只认 `workflow` 指向 `meeting.js` 且带 `args.seats` 的调用；识别不到就当没这回事，不影响会议本身。发事件失败只会在 pi 里报一条警告。
+
 ### 跑本仓库
 
 想改代码或看页面而不装扩展：
@@ -109,6 +124,7 @@ http://127.0.0.1:34721/meeting/demo-<随机 UUID>
 - `npm run dev` 启用 Node 文件监视；代码变化会重启服务并清空内存会议
 - `npm test` 运行 Node 内置测试，不调用模型、不下载资源
 - 用 `pi install` 装的是同一份代码；扩展只是把 `npm start` 包成了 `/meeting` 命令，两种启动方式不要同时用（端口会撞）
+- 版本号按 **0.1 递增**（0.1.0 → 0.2.0 → 0.3.0），每推一次功能更新加一位
 
 PowerShell 自定义端口示例：
 
