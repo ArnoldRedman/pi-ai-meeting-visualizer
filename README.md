@@ -67,7 +67,15 @@ assets/      资源目录：Kenney 下载缓存、各厂家自制角色 GLB、�
 
 ```sh
 pi install git:github.com/ArnoldRedman/pi-ai-meeting-visualizer
+pi list | grep visualizer      # 确认在列表里（cmd 用 findstr）
 ```
+
+最快一次上手：
+
+1. 装完**重开一个 Pi 会话**（已经开着的会话要重启或 `/reload` 才会加载新插件）
+2. 用 [pi-ai-meeting](https://github.com/ArnoldRedman/pi-ai-meeting) 开会——插件会自己认出 `meeting.js`，把房间拉起来，并在 pi 里给你一条门牌链接（`/meeting/<会话 id>`），点开就能看
+3. 只想先看看长什么样：`/meeting open`，页面上点「开始模拟会议」会跑一场内置模拟会议
+4. 随时控制：`/meeting status` 看状态、`/meeting stop` 停服务、`/meeting config` 改自动行为
 
 装完后在 Pi 里用 `/meeting` 控制会议室：
 
