@@ -1,6 +1,6 @@
 {
   "name": "pi-ai-meeting-visualizer",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "浏览器中的 AI 会议室可视化插件",
   "private": true,
   "type": "module",

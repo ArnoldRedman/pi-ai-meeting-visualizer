@@ -13,7 +13,9 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Type } from 'typebox';
-import { childNotice, readStance, seatIdFor, workflowKeyFor } from '../lib/meeting-follow.mjs';
+import {
+  baseKeyFor, childLedger, childNotice, conclusionFor, roundOfKey, seatIdFor, stanceFromText, workflowKeyFor,
+} from '../lib/meeting-follow.mjs';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 
 // 扩展固定位于 <包>/extensions/ 下，包根目录就是它的上一级
@@ -233,10 +235,14 @@ type Meeting = {
   toolCallId: string;
   sessionId: string;
   ids: Map<string, string>;
-  // 会议脚本 runs.all 的 key → 席位 id（用来把子会话完成通知对回席位）
+  // 会议脚本 runs 的 key（第一轮的）→ 席位 id；第二轮的 key 是它加 -r2（或 -r2-fresh）
   keys: Map<string, string>;
-  // 已经提前报过 seat_finished 的席位（协议规定非工作状态不能重复 finish，只能改立场）
-  finished: Set<string>;
+  // 已经开到第几轮：第二轮的事件只有这里推进过才发得出去（协议要求先 round_started）
+  round: number;
+  // 已经报过 seat_finished 的子会话 key，第二轮靠它区分“这一轮报过没有”
+  reported: Set<string>;
+  // 已经发过 seat_started 的「轮:席位」
+  started: Set<string>;
   asyncDir?: string;
   runId?: string;
 };
@@ -330,14 +336,26 @@ async function openMeeting(toolCallId: string, call: { tag: string; seats: SeatA
   await postEvent(sessionId, { type: 'meeting_started', sessionId, tag: cut(call.tag || '多模型会议', 200), seats });
   await postEvent(sessionId, { type: 'round_started', sessionId, round: 1 });
   // runs.all 会让所有席位同时开跑，所以一次全部置为工作中
-  for (const seat of seats) await postEvent(sessionId, { type: 'seat_started', sessionId, seat: seat.id, round: 1 });
-  meetings.set(toolCallId, { toolCallId, sessionId, ids, keys, finished: new Set<string>() });
+  const started = new Set<string>();
+  for (const seat of seats) {
+    started.add(`1:${seat.id}`);
+    await postEvent(sessionId, { type: 'seat_started', sessionId, seat: seat.id, round: 1 });
+  }
+  meetings.set(toolCallId, {
+    toolCallId, sessionId, ids, keys, round: 1, reported: new Set<string>(), started,
+  });
   if (settings.autoOpen) openPage(`${BASE_URL}/meeting/${sessionId}`);
   ctx.ui.notify(`会议室已就绪：${BASE_URL}/meeting/${sessionId}（${seats.length} 席）${fetchedAssets ? '，首次已自动下载资源' : ''}`, 'info');
 }
 
-// 一轮结束时把逐席结论补上；交叉质询的改判用 stance_changed 表示（那一轮的数据是跟本轮一起到的，
-// 重建一个第二轮只会让画面在最后一秒闪两下，也误导真实节奏）
+// 席位 id → 第一轮 key（keys 表就是按第一轮 key 建的）
+function keyForSeat(meeting: Meeting, id: string): string {
+  for (const [key, value] of meeting.keys) if (value === id) return key;
+  return '';
+}
+
+// 整轮结束时补上还没报过的席位；逐席报过的（含第二轮）在这里一概不重复 finish，
+// 只把整轮的票型与结论写成 meeting_finished
 async function closeMeeting(meeting: Meeting, data: MeetingReturn | null, isError: boolean, errorText: string, ctx: ExtensionContext): Promise<void> {
   const { sessionId, ids } = meeting;
   if (isError || !data?.perSeat) {
@@ -353,23 +371,23 @@ async function closeMeeting(meeting: Meeting, data: MeetingReturn | null, isErro
     const id = ids.get(String(row.seat ?? '')) ?? [...ids.values()][index];
     if (!id) continue;
     if (row.ok === false) failed += 1;
-    // 整轮结束才回来、而且已经提前报过结论的席位：只能更新公开立场（协议不允许重复 finish）
-    if (meeting.finished.has(id)) {
-      const stance = cut(row.stance || '', 200);
-      if (stance) await postEvent(sessionId, { type: 'stance_changed', sessionId, seat: id, stance });
+    const key = keyForSeat(meeting, id);
+    // 已经逐席报过第一轮的席位：不再重复 finish（协议不允许），改判只补一次立场
+    if (key && meeting.reported.has(key)) {
+      if (row.stanceRound === 2 && !meeting.reported.has(`${key}-r2`) && !meeting.reported.has(`${key}-r2-fresh`)) revised.add(index);
       continue;
     }
+    if (key) meeting.reported.add(key);
     const first = data.round1?.[index];
-    // 第一轮的正文配 round 1；改判过的立场用后面的 stance_changed 单独发
     const message = cut(first?.stance || first?.text || row.stance || (row.ok === false ? '本轮没有给出结论' : '本轮完成'), 2000);
     await postEvent(sessionId, { type: 'seat_finished', sessionId, seat: id, round: 1, status: row.ok === false ? 'error' : 'ok', message });
     if (row.stanceRound === 2) revised.add(index);
   }
   for (const index of revised) {
     const id = [...ids.values()][index];
-    if (!id || meeting.finished.has(id)) continue;
+    if (!id) continue;
     const stance = cut(data.round2?.[index]?.stance, 200);
-    if (stance) await postEvent(sessionId, { type: 'stance_changed', sessionId, seat: id, stance });
+    if (stance) await postEvent(sessionId, { type: 'stance_changed', sessionId, seat: id, stance, round: 2 });
   }
   const parts = [`${rows.length} 席参与第一轮`];
   if (failed > 0) parts.push(`${failed} 席失败`);
@@ -397,25 +415,64 @@ async function guard(what: string, run: () => Promise<void>, ctx: ExtensionConte
   }
 }
 
-// 一个席位答完就立刻出结论：房间里的它会离开座位去散步（场景本来就把 done 的席位拿去摸鱼/散步）
-async function finishSeatEarly(meeting: Meeting, key: string, failed: boolean, output: string): Promise<void> {
-  const seat = meeting.keys.get(key);
-  if (!seat) return;
-  const stance = failed ? '' : readStance(output);
-  if (meeting.finished.has(seat)) {
-    // 重试或交叉质询又出了新结论：席位已经完成，只能更新公开立场
-    if (stance) await postEvent(meeting.sessionId, { type: 'stance_changed', sessionId: meeting.sessionId, seat, stance: cut(stance, 200) });
-    return;
+// 子会话 key → 席位与轮次（第二轮 key 是 <第一轮 key>-r2，resume 被拒时补的是 -r2-fresh）
+function childSeat(meeting: Meeting, key: string): { seat: string; round: number } | null {
+  const seat = meeting.keys.get(baseKeyFor(key));
+  if (!seat) return null;
+  return { seat, round: roundOfKey(key) };
+}
+
+// 开一轮。协议要求新轮次必须大于当前轮次且上一轮没人在工作，所以先把上一轮没等到结论的
+// 席位收掉（子会话被杀、台账缺行时才会走到这里），再发 round_started
+async function openRound(meeting: Meeting, round: number): Promise<void> {
+  if (meeting.round >= round) return;
+  if (round > 1) {
+    for (const [key, seat] of meeting.keys) {
+      if (meeting.reported.has(key)) continue;
+      meeting.reported.add(key);
+      await postEvent(meeting.sessionId, {
+        type: 'seat_finished', sessionId: meeting.sessionId, seat, round: meeting.round, status: 'error', message: '本轮没有等到结论',
+      });
+    }
   }
+  await postEvent(meeting.sessionId, { type: 'round_started', sessionId: meeting.sessionId, round });
+  meeting.round = round;
+}
+
+// 某个席位的子会话开跑。第二轮靠它把去溜达的人叫回电脑前；第一轮开局已经全部置为工作中
+async function childStarted(meeting: Meeting, key: string): Promise<void> {
+  const target = childSeat(meeting, key);
+  if (!target) return;
+  if (target.round > meeting.round) await openRound(meeting, target.round);
+  const mark = `${target.round}:${target.seat}`;
+  if (meeting.started.has(mark)) return;
+  meeting.started.add(mark);
+  await postEvent(meeting.sessionId, {
+    type: 'seat_started', sessionId: meeting.sessionId, seat: target.seat, round: target.round,
+  });
+}
+
+// 一个席位交卷就立刻出结论，正文直接取自子会话台账，所以点开它就能看到，不必等整轮跑完；
+// 房间里的它会离开桌子去溜达，第二轮交卷则顺带更新公开立场（协议允许完成后再改立场）
+async function childSettled(meeting: Meeting, key: string, failed: boolean, text: string): Promise<void> {
+  const target = childSeat(meeting, key);
+  if (!target || meeting.reported.has(key)) return;
   if (!(await healthy())) return;
-  meeting.finished.add(seat);
+  meeting.reported.add(key);
+  await childStarted(meeting, key);
+  const stance = failed ? '' : stanceFromText(text);
+  const message = failed ? '本轮失败，没有给出结论' : conclusionFor(text) || stance || '本轮已作答，结论等整轮结束一起汇总';
   await postEvent(meeting.sessionId, {
     type: 'seat_finished',
     sessionId: meeting.sessionId,
-    seat,
-    round: 1,
+    seat: target.seat,
+    round: target.round,
     status: failed ? 'error' : 'ok',
-    message: cut(stance || (failed ? '本轮失败' : '本轮已作答，结论等整轮结束一起汇总'), 2000),
+    message: cut(message, 2000),
+  });
+  if (!stance) return;
+  await postEvent(meeting.sessionId, {
+    type: 'stance_changed', sessionId: meeting.sessionId, seat: target.seat, round: target.round, stance: cut(stance, 200),
   });
 }
 
@@ -433,6 +490,15 @@ function readStatus(asyncDir: string): any {
   }
 }
 
+// 子会话完成通知里给的是产物路径，读全文交给结论提取；文件没了就当没正文
+function readText(file: string): string {
+  try {
+    return readFileSync(file, 'utf8');
+  } catch {
+    return '';
+  }
+}
+
 // 通知里带的那份返回值可能被截断，所以优先读 status.json：那里存着完整的 workflow.value
 async function finishAsync(meeting: Meeting, notice: string, ctx: ExtensionContext): Promise<void> {
   const status = meeting.asyncDir ? readStatus(meeting.asyncDir) : null;
@@ -447,23 +513,46 @@ async function finishAsync(meeting: Meeting, notice: string, ctx: ExtensionConte
   await guard('收尾', () => closeMeeting(meeting, data, !ok, reason, ctx), ctx);
 }
 
+// 子会话台账（workflow-children.jsonl）就在会议 run 目录里：一行 start、一行 settle，settle 带完整输出。
+// 这是逐席出结论唯一可靠的口子——子会话完成通知在 Pi 里是以 custom message 投递的，不触发 message_start
+function readLedger(meeting: Meeting): Array<{ type: string; key: string; failed?: boolean; output?: string }> {
+  if (!meeting.asyncDir) return [];
+  try {
+    return childLedger(readFileSync(path.join(meeting.asyncDir, 'workflow-children.jsonl'), 'utf8'));
+  } catch {
+    return [];  // 还没落盘，或这个 pi-subagents 版本没有台账
+  }
+}
+
+// 把台账里新的「开跑 / 交卷」翻成房间事件。台账是追加写的，重复读同样的行靠 reported / started 去重
+async function followChildren(meeting: Meeting, ctx: ExtensionContext): Promise<void> {
+  const rows = readLedger(meeting);
+  if (rows.length === 0) {
+    // 没有台账就退回状态快照：轮次和完成状态还对得上，但拿不到结论正文
+    for (const step of (meeting.asyncDir ? readStatus(meeting.asyncDir) : null)?.steps ?? []) {
+      const key = String(step.workflowKey ?? '');
+      if (!meeting.keys.has(baseKeyFor(key))) continue;
+      if (step.status === 'completed' || step.status === 'failed') await childSettled(meeting, key, step.status === 'failed', '');
+      else if (RUNNING_STATES.has(String(step.status))) await childStarted(meeting, key);
+    }
+    return;
+  }
+  for (const row of rows) {
+    if (row.type === 'start') await childStarted(meeting, row.key);
+    else await childSettled(meeting, row.key, Boolean(row.failed), String(row.output ?? ''));
+  }
+}
+
 async function watchAsyncRun(meeting: Meeting, asyncDir: string, ctx: ExtensionContext): Promise<void> {
   const deadline = Date.now() + 2 * 60 * 60 * 1000;
   while (Date.now() < deadline) {
-    await new Promise(resolve => setTimeout(resolve, 30_000));
+    // 5 秒一次：轮次切换和逐席结论都靠它，慢过这个数画面就能看出滞后
+    await new Promise(resolve => setTimeout(resolve, 5_000));
     // 已经被完成通知收过尾就不管了
     if (!meetings.has(meeting.toolCallId)) return;
+    await guard('跟随', () => followChildren(meeting, ctx), ctx);
     const status = readStatus(asyncDir);
-    if (!status) continue;
-    // 顺便把已经跑完的子会话按席位报掉：没有完成通知的环境（pi -p 无头跑）也就能逐席出结论，
-    // 这里拿不到结论正文，整轮落盘时再用 stance_changed 补
-    for (const step of status.steps ?? []) {
-      if (step.status !== 'completed' && step.status !== 'failed') continue;
-      const key = String(step.workflowKey ?? '');
-      if (!meeting.keys.has(key) || meeting.finished.has(meeting.keys.get(key) as string)) continue;
-      await guard('提前收尾', () => finishSeatEarly(meeting, key, step.status === 'failed', ''), ctx);
-    }
-    if (RUNNING_STATES.has(String(status.state))) continue;
+    if (!status || RUNNING_STATES.has(String(status.state))) continue;
     const taken = takeMeeting(meeting.toolCallId);
     if (!taken) return;
     await finishAsync(taken, '', ctx);
@@ -509,7 +598,7 @@ export default function meetingVisualizer(pi: ExtensionAPI) {
     if (child) {
       for (const meeting of meetings.values()) {
         if (meeting.runId !== child.runId) continue;
-        await guard('提前收尾', () => finishSeatEarly(meeting, child.key, child.failed, child.output), ctx);
+        await guard('提前收尾', () => childSettled(meeting, child.key, child.failed, readText(child.output)), ctx);
       }
       return;
     }
