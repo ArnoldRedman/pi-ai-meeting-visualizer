@@ -23,4 +23,24 @@ if (!Number.isInteger(port) || port < 1 || port > 65535) {
   };
   process.once('SIGINT', stop);
   process.once('SIGTERM', stop);
+  // 由 Pi 扩展拉起时会把父进程 pid 传进来：父进程被强杀（Ctrl+C、关窗口、崩溃）时没有人来得及收这个子进程，
+  // 所以自己看着父进程，它没了就退出，不留下占着端口的孤儿。手动 `npm start` 没有这个环境变量，也就不会自退。
+  // shortcut: 只看父进程 pid，pid 被系统回收复用时会漏一次（概率极低），漏了也只是留个孤儿服务
+  const parentPid = Number(process.env.PARENT_PID);
+  if (Number.isInteger(parentPid) && parentPid > 0) {
+    const alive = pid => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch (error) {
+        return error.code !== 'ESRCH';
+      }
+    };
+    const watchdog = setInterval(() => {
+      if (alive(parentPid)) return;
+      stop();
+      process.exit(0);
+    }, 5000);
+    watchdog.unref();
+  }
 }

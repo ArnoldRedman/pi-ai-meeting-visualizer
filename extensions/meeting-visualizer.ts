@@ -7,7 +7,7 @@
  * 2. 自动跟随 ai-meeting：认出 `subagent` 在跑它的 meeting.js 就自动建会、逐席发事件，不用手动调。
  * 事件协议见 protocol/meeting-events.md，这里只做适配，不读模型内部调用细节。
  */
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn, execFileSync, type ChildProcess } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
@@ -136,6 +136,36 @@ function stopServer(): boolean {
   return true;
 }
 
+// 按端口找占用者：只在本会话没句柄时才用（/reload 之后，或上一次 pi 被强杀留下的孤儿）
+function portOwner(): number | null {
+  try {
+    const output = process.platform === 'win32'
+      ? execFileSync('netstat', ['-ano'], { encoding: 'utf8' })
+      : execFileSync('lsof', ['-ti', `tcp:${PORT}`], { encoding: 'utf8' });
+    const line = output.split('\n').filter(row => row.includes(`:${PORT}`)).at(-1) ?? '';
+    const pid = Number(line.trim().split(/\s+/).at(-1));
+    return Number.isInteger(pid) && pid > 0 ? pid : null;
+  } catch {
+    // lsof 没装、netstat 输出异常都当作没找到，让调用方回一句可操作的提示
+    return null;
+  }
+}
+
+// 句柄丢了但端口上确实有服务：这是没法用 child.kill() 收的，只能按端口杀掉，
+// 否则 /meeting stop 只会回一句“本来就没在跑”
+async function stopOrphan(): Promise<string> {
+  if (!(await healthy())) return '';
+  const pid = portOwner();
+  if (!pid) return `端口 ${PORT} 上有服务但没找到它的进程号，请手动停掉`;
+  try {
+    if (process.platform === 'win32') execFileSync('taskkill', ['/PID', String(pid), '/F'], { stdio: 'ignore' });
+    else process.kill(pid, 'SIGTERM');
+  } catch (error) {
+    return `端口上的服务（PID ${pid}）停不掉：${(error as Error).message}`;
+  }
+  return `已停掉没能接管的服务（PID ${pid}）`;
+}
+
 async function ensureAssets(): Promise<string> {
   if (existsSync(KENNEY_MARKER)) return '';  // 直接跑下载脚本，不经过 npm：Windows 上裸 spawn npm.cmd 会 EINVAL，也少一层 PATH 依赖
   await new Promise<void>((resolve, reject) => {
@@ -166,7 +196,7 @@ async function start(): Promise<string> {
   crash = '';
   const child = spawn(process.execPath, [path.join(ROOT, 'server/dev-server.mjs')], {
     cwd: ROOT,
-    env: { ...process.env, PORT: String(PORT) },
+    env: { ...process.env, PORT: String(PORT), PARENT_PID: String(process.pid) },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   server = child;
@@ -191,14 +221,19 @@ async function status(): Promise<string> {
   const response = await fetch(`${BASE_URL}/api/sessions`, { signal: AbortSignal.timeout(1500) });
   const data = await response.json() as { sessions?: Array<{ id: string; tag?: string; status: string; round: number; eventCount: number }> };
   const sessions = data.sessions ?? [];
-  if (sessions.length === 0) return `会议室服务在跑：${BASE_URL}（还没有会议）`;
+  // 句柄不在但端口有人守着：/reload 或上次强杀留下的，说清楚它归谁，免得以为自己的 stop 没用
+  const note = server ? '' : '（这个服务不是本会话拉起来的，/meeting stop 会按端口把它停掉）';
+  if (sessions.length === 0) return `会议室服务在跑：${BASE_URL}（还没有会议）${note}`;
   const lines = sessions.map(item => `- ${item.id} · ${item.status} · 第 ${item.round} 轮 · ${item.eventCount} 条事件${item.tag ? ` · ${item.tag}` : ''}`);
-  return `会议室服务在跑：${BASE_URL}\n${lines.join('\n')}`;
+  return `会议室服务在跑：${BASE_URL}${note}\n${lines.join('\n')}`;
 }
 
 async function run(action: Action): Promise<string> {
   if (action === 'status') return status();
-  if (action === 'stop') return stopServer() ? '会议室服务已停止' : '会议室服务本来就没在跑';
+  if (action === 'stop') {
+    // 先用句柄收尾；句柄已经丢了（/reload、上一次被强杀）就按端口兜底
+    return stopServer() ? '会议室服务已停止' : await stopOrphan() || '会议室服务本来就没在跑';
+  }
   if (action === 'open') {
     const note = await start();
     openPage(BASE_URL);

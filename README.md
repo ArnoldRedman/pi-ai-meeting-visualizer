@@ -108,6 +108,8 @@ pi list | grep visualizer      # 确认在列表里（cmd 用 findstr）
 
 自动停只会停本会话自己拉起来的那个服务（别的会话在用的不碰）；`/meeting stop` 随时能立即停。所有自动行为都只影响可视化，不会改动会议本身。
 
+**退出 pi 时服务会怎样**：正常退出（Ctrl+D、`/quit`）走 `session_shutdown`，服务被一起停掉；被强杀（Ctrl+C、关窗口、崩溃）时 pi 来不及收尾，所以服务自己看着父进程 pid，父进程一消失（≤5 秒）就退出，不留下占着端口的孤儿。万一还是有一个没人接管的（比如 `/reload` 之后扩展句柄丢了），`/meeting stop` 会按端口把它找出来杀掉，`/meeting status` 也会注明「这个服务不是本会话拉起来的」。
+
 ### 开会时自动出现
 
 装了 [pi-ai-meeting](https://github.com/ArnoldRedman/pi-ai-meeting) 的会话里**不用手动敲命令**：只要 `subagent` 开始跑它的 `meeting.js`，插件就认出这场会议、自动把服务拉起来，并在 pi 里 notify 一个门牌（`/meeting/<会话 id>`）。
