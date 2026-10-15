@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>AI 会议室 · 本地原型</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/styles.css">
+  <!-- SCENE_IMPORT_MAP -->
+  <script type="module" src="/app.mjs"></script>
+</head>
+<body data-page="index"><!-- 会议页由服务端把 data-page 改写为 meeting -->
+  <header class="topbar">
+    <a href="/" class="brand"><span class="brand-mark" aria-hidden="true">M</span> AI 会议室 <span class="edition">VISUALIZER / 01</span></a>
+    <span class="local-label">127.0.0.1 <span>· 仅本机</span></span>
+  </header>
+  <main>
+    <section class="intro" aria-labelledby="meeting-title">
+      <div>
+        <p class="eyebrow">MEETING OBSERVATORY <span> / 会议观察室</span></p>
+        <h1 id="meeting-title">让讨论，变得可见。</h1>
+        <p id="meeting-caption" class="caption">从公开事件观察会议进展。不调用模型，不展示模型内部思维过程。</p>
+      </div>
+      <button id="start-demo" type="button">开始模拟会议 <span aria-hidden="true">↗</span></button>
+    </section>
+
+    <p id="connection" class="connection" role="status">正在连接本地服务…</p>
+    <p id="action-error" class="error" role="alert" hidden></p>
+
+    <div class="workspace">
+      <section class="meeting-panel" aria-labelledby="room-heading">
+        <div class="panel-heading">
+          <h2 id="room-heading">会议现场</h2>
+          <span id="phase" class="badge" role="status">等待会议</span>
+        </div>
+        <div class="scene-toolbar">
+          <span>KENNEY / 模拟会议室</span>
+          <span class="scene-hint">拖动旋转 · 滚轮缩放 · 点击人物看他的思考过程</span>
+          <span id="scene-stage" role="status">等待模拟会议</span>
+          <button id="scene-view" type="button" hidden>切换俯视</button>
+          <button id="scene-reset" type="button" hidden title="快捷键 R">重置视角</button>
+          <button id="drawer-toggle" type="button" aria-controls="event-panel" aria-expanded="false">会议详情</button>
+        </div>
+        <div id="scene-container" class="scene-container" data-state="loading">
+          <canvas id="scene-canvas" aria-label="3D 会议室，人物旁显示模型名称与进度，点击人物可聚焦看他的思考过程和结论" role="img"></canvas>
+          <div class="scene-labels" aria-label="各模型实时进度"></div>
+          <aside id="focus-card" class="focus-card" hidden aria-labelledby="focus-name">
+            <div class="focus-head">
+              <div>
+                <h3 id="focus-name"></h3>
+                <p id="focus-meta" class="focus-meta"></p>
+              </div>
+              <button id="focus-close" type="button" aria-label="取消聚焦" title="快捷键 Esc">✕</button>
+            </div>
+            <p id="focus-stance" class="focus-stance"></p>
+            <p id="focus-output" class="focus-output" hidden></p>
+            <p class="focus-note">公开进度事件 · 不含模型内部思维</p>
+            <ol id="focus-steps" class="focus-steps"></ol>
+          </aside>
+          <p id="scene-message" class="scene-message" role="status">正在布置 3D 会议室…</p>
+        </div>
+        <div id="room" class="room" data-status="waiting">
+          <div id="seats-top" class="seat-row"></div>
+          <div class="meeting-table">
+            <span class="eyebrow">THE ROUND TABLE</span>
+            <strong id="table-round">准备入座</strong>
+            <span id="table-detail">点击右上角，启动一场模拟讨论</span>
+          </div>
+          <div id="seats-bottom" class="seat-row"></div>
+        </div>
+        <div id="room-footer" class="room-footer"><span id="seat-count">0 个席位</span><span>公开状态 · 非实时模型输出</span></div>
+      </section>
+
+      <aside id="event-panel" class="event-panel" aria-labelledby="event-heading">
+        <div class="panel-heading"><h2 id="event-heading">事件记录</h2><span id="event-count" class="mono">00</span></div>
+        <p class="event-note">按接收顺序展示最近 80 条事件</p>
+        <ol id="event-log" class="event-log" aria-label="会议事件时间线" tabindex="0"></ol>
+        <p id="empty-events" class="empty-events">会议开始后，事件会出现在这里。</p>
+      </aside>
+    </div>
+
+    <section id="conclusion" class="conclusion" aria-labelledby="conclusion-heading" aria-live="polite" hidden>
+      <p class="eyebrow">MEETING NOTES / 会议收尾</p>
+      <h2 id="conclusion-heading">会议结论</h2>
+      <p id="conclusion-text"></p>
+      <p class="caption">最终画面已保留。关闭此页不会停止服务；服务重启会清空内存记录。</p>
+    </section>
+
+    <section class="session-section" aria-labelledby="sessions-heading">
+      <div class="section-heading"><h2 id="sessions-heading">本机会议</h2><span class="caption">一个服务，多场独立会议</span></div>
+      <ul id="session-list" class="session-list"></ul>
+      <p id="session-message" class="caption">正在读取会议列表…</p>
+    </section>
+    <footer class="footer"><span>PI AI MEETING / 独立视觉插件</span><span>资源：<a href="https://kenney.nl/assets/mini-characters" target="_blank" rel="noreferrer">Mini Characters</a> + <a href="https://kenney.nl/assets/furniture-kit" target="_blank" rel="noreferrer">Furniture Kit</a> · Kenney / CC0</span></footer>
+  </main>
+  <template id="seat-template">
+    <article class="seat">
+      <div class="avatar" aria-hidden="true"><span class="avatar-head"></span><span class="avatar-body"></span></div>
+      <div class="seat-name"><h3></h3><span class="seat-status"></span></div>
+      <p class="seat-message"></p>
+      <p class="seat-stance"></p>
+    </article>
+  </template>
+</body>
+</html>

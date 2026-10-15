@@ -1,0 +1,16 @@
+node_modules/
+.pi/
+.DS_Store
+*.log
+assets/cache/
+
+# Blender 自动备份（每次保存都会重新生成）与 Python 字节码
+*.blend1
+*.blend2
+__pycache__/
+*.pyc
+
+# 建模中间文件、预览图和标志源图属于角色仓库（pi-meeting-chibis），不提交到本仓库
+assets/models/characters/*-work.blend
+assets/models/characters/preview/
+assets/models/characters/textures/

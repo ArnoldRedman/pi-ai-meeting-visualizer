@@ -1,0 +1,39 @@
+{
+  "name": "pi-ai-meeting-visualizer",
+  "version": "0.1.0",
+  "description": "浏览器中的 AI 会议室可视化插件",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "keywords": [
+    "pi-package"
+  ],
+  "files": [
+    "extensions/",
+    "server/",
+    "web/",
+    "protocol/",
+    "assets/manifest.mjs",
+    "assets/README.md",
+    "assets/models/characters/*.glb",
+    "scripts/",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "node --watch server/dev-server.mjs",
+    "start": "node server/dev-server.mjs",
+    "test": "node --test",
+    "assets:fetch": "node scripts/fetch-assets.mjs"
+  },
+  "dependencies": {
+    "fflate": "0.8.3",
+    "three": "0.180.0"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  }
+}
