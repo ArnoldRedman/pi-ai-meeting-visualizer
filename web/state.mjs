@@ -17,6 +17,20 @@ function seatLogEntry(event) {
   }
 }
 
+// 逐轮结论：气泡和卡片只放摘要，全文留给弹窗，所以这里要把每一轮的结论单独存下来
+function roundResult(event) {
+  return {
+    round: event.round ?? 1,
+    status: event.status === 'ok' ? 'ok' : 'error',
+    message: event.message || (event.status === 'ok' ? '本轮工作完成' : '本轮工作失败'),
+  };
+}
+
+function mergeRound(seat, result) {
+  const rows = (seat.rounds ?? []).filter(row => row.round !== result.round);
+  return [...rows, result].sort((a, b) => a.round - b.round);
+}
+
 export function recordSeatEvent(log, event) {
   const entry = seatLogEntry(event);
   if (!entry) return log;
@@ -33,7 +47,7 @@ export function reduceMeeting(state, event) {
     case 'meeting_started':
       return {
         ...initialMeeting(), sessionId: event.sessionId, tag: event.tag, status: 'running',
-        seats: event.seats.map(seat => ({ ...seat, status: 'waiting', message: '等待本轮开始', stance: '' })),
+        seats: event.seats.map(seat => ({ ...seat, status: 'waiting', message: '等待本轮开始', stance: '', rounds: [] })),
       };
     case 'round_started':
       return {
@@ -50,10 +64,17 @@ export function reduceMeeting(state, event) {
           if (seat.id !== event.seat) return seat;
           if (event.type === 'seat_started') return { ...seat, status: 'working', message: '正在整理观点' };
           if (event.type === 'seat_progress') return { ...seat, message: event.message };
-          if (event.type === 'stance_changed') return { ...seat, stance: event.stance };
+          if (event.type === 'stance_changed') {
+            return {
+              ...seat, stance: event.stance,
+              // 立场变更紧跟在交卷后，把该轮的结论补上它自己的立场
+              rounds: (seat.rounds ?? []).map(row => (row.round === (event.round ?? row.round) ? { ...row, stance: event.stance } : row)),
+            };
+          }
+          const result = roundResult(event);
           return {
             ...seat, status: event.status === 'ok' ? 'done' : 'failed',
-            message: event.message || (event.status === 'ok' ? '本轮工作完成' : '本轮工作失败'),
+            message: result.message, rounds: mergeRound(seat, result),
           };
         }),
       };

@@ -55,6 +55,7 @@
             </div>
             <p id="focus-stance" class="focus-stance"></p>
             <p id="focus-output" class="focus-output" hidden></p>
+            <button id="focus-more" type="button" class="focus-more" hidden>展开结论全文</button>
             <p class="focus-note">公开进度事件 · 不含模型内部思维</p>
             <ol id="focus-steps" class="focus-steps"></ol>
           </aside>
@@ -94,11 +95,24 @@
     </section>
     <footer class="footer"><span>PI AI MEETING / 独立视觉插件</span><span>角色：<a href="https://github.com/ArnoldRedman/pi-meeting-chibis" target="_blank" rel="noreferrer">pi-meeting-chibis</a>（CC BY-NC-SA 4.0） · 默认角色与家具：<a href="https://kenney.nl/assets/mini-characters" target="_blank" rel="noreferrer">Mini Characters</a> + <a href="https://kenney.nl/assets/furniture-kit" target="_blank" rel="noreferrer">Furniture Kit</a> · Kenney / CC0</span></footer>
   </main>
+  <!-- 结论全文放弹窗：气泡、档案卡、席位卡只放摘要，否则长结论会把版面撑爆 -->
+  <dialog id="seat-modal" class="seat-modal" aria-labelledby="modal-name">
+    <div class="modal-head">
+      <div>
+        <h3 id="modal-name"></h3>
+        <p id="modal-meta" class="modal-meta"></p>
+      </div>
+      <button id="modal-close" type="button" class="modal-close" aria-label="关闭结论全文" title="Esc">✕</button>
+    </div>
+    <p id="modal-stance" class="modal-stance"></p>
+    <div id="modal-body" class="modal-body"></div>
+  </dialog>
   <template id="seat-template">
     <article class="seat">
       <div class="avatar" aria-hidden="true"><span class="avatar-head"></span><span class="avatar-body"></span></div>
       <div class="seat-name"><h3></h3><span class="seat-status"></span></div>
       <p class="seat-message"></p>
+      <button type="button" class="seat-more">展开结论全文</button>
       <p class="seat-stance"></p>
     </article>
   </template>

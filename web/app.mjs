@@ -11,6 +11,8 @@ let sessionListKey = '';
 let meetingScene = null;
 let sceneRequest = 0;
 let focusedSeat = null;
+// 结论全文弹窗当前在看哪个人；空表示没开
+let modalSeat = null;
 // 每个席位的公开事件时间线：聚焦面板的“思考过程”只从这里读
 const seatLog = new Map();
 
@@ -103,6 +105,7 @@ function renderMeeting() {
     card.querySelector('h3').textContent = seat.model || seat.label;
     card.querySelector('.seat-status').textContent = seatPhases[seat.status];
     card.querySelector('.seat-message').textContent = seat.message;
+    card.querySelector('.seat-more').dataset.expand = seat.id;
     card.querySelector('.seat-stance').textContent = seat.stance || '尚未表态';
     $(index < Math.ceil(state.seats.length / 2) ? 'seats-top' : 'seats-bottom').append(card);
   });
@@ -114,6 +117,7 @@ function renderMeeting() {
     $('conclusion-text').textContent = state.status === 'failed' ? state.error : state.summary;
   }
   renderFocus();
+  if ($('seat-modal').open) renderSeatModal();
 }
 
 // 聚焦面板：模型名、职责、公开立场、逐条思考过程和本轮结论
@@ -165,9 +169,72 @@ function renderFocus() {
   block.textContent = output;
   block.dataset.status = seat.status ?? 'waiting';
   block.hidden = !output;
+  $('focus-more').hidden = !output;
+  $('focus-more').dataset.expand = seat.id;
   for (const bubble of document.querySelectorAll('.character-bubble')) {
     bubble.classList.toggle('focused', bubble.dataset.seat === seat.id);
   }
+}
+
+function seatsForDisplay() {
+  return state.seats.length ? state.seats : previewSeats;
+}
+
+// 结论全文弹窗：气泡、档案卡、席位卡都只放摘要，长结论只在这里展开
+function renderSeatModal() {
+  const seat = modalSeat ? seatsForDisplay().find(item => item.id === modalSeat) : null;
+  if (!seat) return;
+  $('modal-name').textContent = seat.model || seat.label;
+  const meta = $('modal-meta');
+  meta.textContent = `${seat.label} · ${seatPhases[seat.status ?? 'waiting']}`;
+  meta.dataset.status = seat.status ?? 'waiting';
+  $('modal-stance').textContent = `公开立场：${seat.stance || '尚未表态'}`;
+  const body = $('modal-body');
+  body.replaceChildren();
+  for (const row of seat.rounds ?? []) {
+    const section = document.createElement('section');
+    section.className = 'modal-round';
+    const heading = document.createElement('h4');
+    heading.dataset.status = row.status ?? 'ok';
+    heading.textContent = `第 ${row.round ?? 1} 轮 · ${row.status === 'error' ? '本轮失败' : '结论'}`;
+    const text = document.createElement('p');
+    // 结论只进 textContent，公开事件文本不能当 HTML 执行
+    text.textContent = row.message || '这一轮没有给出结论';
+    section.append(heading, text);
+    if (row.stance) {
+      const stance = document.createElement('p');
+      stance.className = 'modal-round-stance';
+      stance.textContent = `该轮更新立场：${row.stance}`;
+      section.append(stance);
+    }
+    body.append(section);
+  }
+  if (!body.children.length) {
+    const empty = document.createElement('p');
+    empty.className = 'modal-empty';
+    empty.textContent = seat.message ? `最新输出：${seat.message}` : '这个席位还没有公开结论';
+    body.append(empty);
+  }
+}
+
+function openSeatModal(seatId) {
+  modalSeat = seatId;
+  renderSeatModal();
+  const modal = $('seat-modal');
+  if (!modal.open) modal.showModal();
+}
+
+function setupSeatModal() {
+  const modal = $('seat-modal');
+  // 点弹窗背景关闭（Esc 是 dialog 自带的）
+  modal.addEventListener('click', event => { if (event.target === modal) modal.close(); });
+  $('modal-close').addEventListener('click', () => modal.close());
+  modal.addEventListener('close', () => { modalSeat = null; });
+  // 气泡、档案卡、席位卡三处共用同一套展开按钮
+  document.addEventListener('click', event => {
+    const trigger = event.target.closest('[data-expand]');
+    if (trigger) openSeatModal(trigger.dataset.expand);
+  });
 }
 
 function describeEvent(event) {
@@ -314,6 +381,7 @@ function setupSeatFocus() {
   $('focus-card').addEventListener('wheel', event => event.stopPropagation());
   // 席位列表比人物好点得多，两处入口都聚焦同一个人
   $('room').addEventListener('click', event => {
+    if (event.target.closest('button')) return;  // 展开按钮自己开弹窗，别再抢一次聚焦
     const card = event.target.closest('.seat');
     if (card) meetingScene?.focus(card.dataset.seat);
   });
@@ -328,4 +396,5 @@ setupMeetingDrawer();
 setupSeatFocus();
 loadSessions();
 loadScene();
+setupSeatModal();
 if (sessionId) pollEvents();

@@ -26,6 +26,13 @@ export function placeLabels(anchors, width, height, obstacles = []) {
   return placed;
 }
 
+// 气泡只留一句话：优先用公开立场（它本来就是一句话），否则把正文压成预告，全文留给弹窗
+function bubbleLine(seat) {
+  const text = String(seat.stance || seat.message || '').replace(/\*\*/g, '').replace(/\s+/g, ' ').trim();
+  if (!text) return '等待模拟会议开始';
+  return text.length > 44 ? `${text.slice(0, 44)}…` : text;
+}
+
 export function createLabels(container, seats) {
   container.replaceChildren();
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -43,7 +50,12 @@ export function createLabels(container, seats) {
     const status = document.createElement('span');
     status.className = 'bubble-status';
     const progress = document.createElement('p');
-    element.append(name, status, progress);
+    const more = document.createElement('button');
+    more.type = 'button';
+    more.className = 'bubble-more';
+    more.dataset.expand = seat.id;
+    more.textContent = '展开全文';
+    element.append(name, status, progress, more);
     container.append(element);
     return { element, line, progress, status };
   });
@@ -61,10 +73,10 @@ export function createLabels(container, seats) {
           : motion.intent === 'roam' ? (motion.path.length ? '已完成 · 溜达中' : `已完成 · ${motion.spot?.label ?? '自由活动'}`)
             : ({ waiting: '等待开始', working: '正在工作', failed: '本轮失败', stopped: '已停止' }[seat.status] || '已完成');
         if (status.textContent !== detail) status.textContent = detail;
-        const message = seat.message || '等待模拟会议开始';
+        const message = bubbleLine(seat);
         if (progress.textContent !== message) {
           progress.textContent = message;
-          element.title = `${seat.model || seat.label} · ${seat.label}\n${message}`;
+          element.title = `${seat.model || seat.label} · ${seat.label}\n${seat.message || ''}`;
         }
       }
     },
